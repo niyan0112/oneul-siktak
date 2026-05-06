@@ -314,7 +314,6 @@ function ShoppingScreen({
         selectedShoppingGroup={selectedShoppingGroup}
         shoppingGroups={shoppingGroups}
         toggleItem={toggleItem}
-        weeklyPlan={weeklyPlan}
       />
     </div>
   );
