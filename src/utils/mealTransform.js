@@ -156,6 +156,38 @@ function getMonthLabel(monthKey) {
   return `${year}년 ${month}월`;
 }
 
+function getDateFromIso(isoDate) {
+  const [year, month, day] = isoDate.split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function inferMealGroup(meal) {
+  if (meal.group) return meal.group;
+  if (!meal.shoppingGroup || meal.shoppingLabel?.includes('자유식') || meal.shoppingLabel?.includes('외식')) return 'free';
+  if (meal.shoppingLabel?.includes('1차') || /-A$/.test(meal.shoppingGroup)) return 'first';
+  if (meal.shoppingLabel?.includes('2차') || /-B$/.test(meal.shoppingGroup)) return 'second';
+
+  const date = getDateFromIso(meal.date);
+  return getGroupClass(date);
+}
+
+function normalizeManualMeal(meal, manualPlan) {
+  const date = getDateFromIso(meal.date);
+  const group = inferMealGroup(meal);
+  const shoppingLabel = meal.shoppingLabel || getShoppingLabel(date);
+  const tag = meal.tag || shoppingLabel;
+
+  return {
+    sourceLabel: meal.sourceLabel || manualPlan.sourceLabel || SOURCE_LABEL,
+    ...meal,
+    group,
+    day: meal.day || DAY_LABELS[date.getDay()],
+    dateLabel: meal.dateLabel || formatShortDate(date),
+    shoppingLabel,
+    tag,
+  };
+}
+
 export function getManualMonthlyMealPlan(monthKey) {
   const manualPlan = monthlyMealPlans[monthKey];
   if (!manualPlan?.meals?.length) return null;
@@ -167,10 +199,7 @@ export function getManualMonthlyMealPlan(monthKey) {
     source: 'manual-reviewed',
     sourceLabel: manualPlan.sourceLabel || SOURCE_LABEL,
     updatedAt: manualPlan.updatedAt || new Date().toISOString().slice(0, 10),
-    meals: manualPlan.meals.map((meal) => ({
-      sourceLabel: meal.sourceLabel || manualPlan.sourceLabel || SOURCE_LABEL,
-      ...meal,
-    })),
+    meals: manualPlan.meals.map((meal) => normalizeManualMeal(meal, manualPlan)),
   };
 }
 
