@@ -10,7 +10,7 @@ import { TodayMealCard } from './components/TodayMealCard';
 import { appConfig } from './config/appConfig';
 import { monthlyShoppingLists } from './data/monthlyShoppingLists';
 import { shoppingLists } from './data/shoppingLists';
-import { getCurrentWeekDates, getTodayTitle } from './utils/date';
+import { formatIsoDate, getCurrentWeekDates, getTodayTitle } from './utils/date';
 import { getCurrentMonthKey } from './utils/monthAccess';
 import {
   buildMonthlyPlanFromFallback,
@@ -38,10 +38,82 @@ const tabs = [
   { id: 'shopping', label: appConfig.tabs.shopping, icon: ShoppingBasket },
 ];
 
-const shoppingRounds = {
-  first: { group: 1, blockIndex: 0, list: shoppingLists[1] },
-  second: { group: 2, blockIndex: 1, list: shoppingLists[2] },
-};
+function getDateValue(isoDate) {
+  return Date.parse(`${isoDate}T00:00:00`);
+}
+
+function isFirstShoppingGroup(groupId = '', list = {}) {
+  return list.label?.includes('1차') || /-A$/.test(groupId);
+}
+
+function getFallbackShoppingList(groupId, monthlyList) {
+  if (monthlyList) return monthlyList;
+  return isFirstShoppingGroup(groupId, monthlyList) ? shoppingLists[1] : shoppingLists[2];
+}
+
+function buildShoppingGroups(monthlyPlan, monthKey) {
+  const monthlyLists = monthlyShoppingLists[monthKey] || {};
+  const groupIds = [
+    ...new Set([
+      ...Object.keys(monthlyLists),
+      ...(monthlyPlan.meals || []).map((meal) => meal.shoppingGroup).filter(Boolean),
+    ]),
+  ].sort((a, b) => {
+    const firstMealA = monthlyPlan.meals.find((meal) => meal.shoppingGroup === a);
+    const firstMealB = monthlyPlan.meals.find((meal) => meal.shoppingGroup === b);
+    return getDateValue(firstMealA?.date || '9999-12-31') - getDateValue(firstMealB?.date || '9999-12-31');
+  });
+
+  return groupIds.map((groupId) => {
+    const meals = (monthlyPlan.meals || [])
+      .filter((meal) => meal.shoppingGroup === groupId && meal.group !== 'free')
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const monthlyList = monthlyLists[groupId];
+    const fallbackList = getFallbackShoppingList(groupId, monthlyList);
+    const firstMeal = meals[0];
+    const lastMeal = meals[meals.length - 1];
+    const period =
+      monthlyList?.period ||
+      (meals.length > 0 ? meals.map((meal) => `${meal.dateLabel} ${meal.day}`).join(' · ') : fallbackList.period);
+    const rangeLabel =
+      firstMeal && lastMeal ? `${firstMeal.dateLabel}~${lastMeal.dateLabel}` : period;
+
+    return {
+      id: groupId,
+      label: monthlyList?.label || fallbackList.label,
+      period,
+      rangeLabel,
+      meals,
+      list: {
+        ...fallbackList,
+        ...monthlyList,
+        period,
+        storageKey: groupId,
+        categories: monthlyList?.categories || fallbackList.categories,
+      },
+    };
+  });
+}
+
+function findInitialShoppingGroup(groups, todayIso) {
+  if (groups.length === 0) return null;
+
+  const todayValue = getDateValue(todayIso);
+  const todayGroup = groups.find((group) => {
+    if (group.meals.length === 0) return false;
+    const firstValue = getDateValue(group.meals[0].date);
+    const lastValue = getDateValue(group.meals[group.meals.length - 1].date);
+    return firstValue <= todayValue && todayValue <= lastValue;
+  });
+
+  if (todayGroup) return todayGroup;
+
+  return [...groups].sort((a, b) => {
+    const aValue = getDateValue(a.meals[0]?.date || '9999-12-31');
+    const bValue = getDateValue(b.meals[0]?.date || '9999-12-31');
+    return Math.abs(aValue - todayValue) - Math.abs(bValue - todayValue);
+  })[0];
+}
 
 function hasUsableWeekdayMeals(plan) {
   const hasMeals =
@@ -56,8 +128,9 @@ function hasUsableWeekdayMeals(plan) {
 function App() {
   const weekDates = useMemo(() => getCurrentWeekDates(), []);
   const monthKey = useMemo(() => getCurrentMonthKey(), []);
+  const todayIso = useMemo(() => formatIsoDate(new Date()), []);
   const [activeTab, setActiveTab] = useState('home');
-  const [shoppingRound, setShoppingRound] = useState('first');
+  const [selectedShoppingGroup, setSelectedShoppingGroup] = useState(null);
   const [checkedItems, setCheckedItems] = useState(getShoppingChecks);
   const [status, setStatus] = useState('loading');
   const [monthlyPlan, setMonthlyPlan] = useState(() => {
@@ -70,6 +143,14 @@ function App() {
     return buildMonthlyPlanFromFallback(monthKey);
   });
   const weeklyPlan = useMemo(() => buildScreenPlanFromMonthlyPlan(monthlyPlan, weekDates), [monthlyPlan, weekDates]);
+  const shoppingGroups = useMemo(() => buildShoppingGroups(monthlyPlan, monthKey), [monthKey, monthlyPlan]);
+
+  useEffect(() => {
+    if (shoppingGroups.length === 0) return;
+    if (selectedShoppingGroup && shoppingGroups.some((group) => group.id === selectedShoppingGroup)) return;
+
+    setSelectedShoppingGroup(findInitialShoppingGroup(shoppingGroups, todayIso)?.id || shoppingGroups[0].id);
+  }, [selectedShoppingGroup, shoppingGroups, todayIso]);
 
   useEffect(() => {
     saveShoppingChecks(checkedItems);
@@ -130,27 +211,16 @@ function App() {
     };
   }, [monthKey]);
 
-  const activeShoppingList = useMemo(() => {
-    const round = shoppingRounds[shoppingRound];
-    const block = weeklyPlan.blocks[round.blockIndex];
-    const groupId = block?.days?.[0]?.shoppingGroup;
-    const monthlyShoppingList = monthlyShoppingLists[monthKey]?.[groupId];
-
-    return {
-      ...round,
-      list: {
-        ...(monthlyShoppingList || round.list),
-        storageKey: groupId || shoppingRound,
-        categories: monthlyShoppingList?.categories || block?.shoppingList || round.list.categories,
-      },
-    };
-  }, [monthKey, shoppingRound, weeklyPlan]);
+  const activeShoppingList = useMemo(
+    () => shoppingGroups.find((group) => group.id === selectedShoppingGroup) || shoppingGroups[0],
+    [selectedShoppingGroup, shoppingGroups],
+  );
 
   const checkedCount = useMemo(() => {
-    const items = Object.values(activeShoppingList.list.categories).flat();
-    const done = items.filter((item) => checkedItems[getShoppingItemKey(shoppingRound, item.name)]).length;
+    const items = Object.values(activeShoppingList?.list.categories || {}).flat();
+    const done = items.filter((item) => checkedItems[getShoppingItemKey(activeShoppingList.id, item.name)]).length;
     return { done, total: items.length || 1 };
-  }, [activeShoppingList, checkedItems, shoppingRound]);
+  }, [activeShoppingList, checkedItems]);
 
   const toggleItem = (key) => {
     setCheckedItems((current) => ({ ...current, [key]: !current[key] }));
@@ -172,10 +242,10 @@ function App() {
             activeShoppingList={activeShoppingList}
             checkedCount={checkedCount}
             checkedItems={checkedItems}
-            shoppingRound={shoppingRound}
-            setShoppingRound={setShoppingRound}
+            selectedShoppingGroup={activeShoppingList?.id}
+            setSelectedShoppingGroup={setSelectedShoppingGroup}
+            shoppingGroups={shoppingGroups}
             toggleItem={toggleItem}
-            weeklyPlan={weeklyPlan}
           />
         )}
 
@@ -185,8 +255,8 @@ function App() {
   );
 }
 
-function getShoppingItemKey(round, name) {
-  return `${round}-${name}`;
+function getShoppingItemKey(groupId, name) {
+  return `shoppingChecks_${groupId}_${name}`;
 }
 
 function HomeScreen({ status, weekDates, weeklyPlan }) {
@@ -226,11 +296,13 @@ function ShoppingScreen({
   activeShoppingList,
   checkedCount,
   checkedItems,
-  shoppingRound,
-  setShoppingRound,
+  selectedShoppingGroup,
+  setSelectedShoppingGroup,
+  shoppingGroups,
   toggleItem,
-  weeklyPlan,
 }) {
+  if (!activeShoppingList) return null;
+
   return (
     <div className="screen">
       <ShoppingList
@@ -238,9 +310,9 @@ function ShoppingScreen({
         checkedCount={checkedCount}
         checkedItems={checkedItems}
         getItemKey={getShoppingItemKey}
-        onRoundChange={setShoppingRound}
-        shoppingRound={shoppingRound}
-        shoppingRounds={shoppingRounds}
+        onGroupChange={setSelectedShoppingGroup}
+        selectedShoppingGroup={selectedShoppingGroup}
+        shoppingGroups={shoppingGroups}
         toggleItem={toggleItem}
         weeklyPlan={weeklyPlan}
       />

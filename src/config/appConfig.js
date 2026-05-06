@@ -22,7 +22,7 @@ export const appConfig = {
     empty: '비워둠',
     sample: '샘플 식단',
     schoolBased: '급식 기반',
-    minjokBased: '민사고 급식 기반',
+    minjokBased: '',
   },
 
   labels: {

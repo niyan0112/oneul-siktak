@@ -7,7 +7,7 @@ import { formatIsoDate, formatShortDate, getWeekKey } from './date';
 import { cleanMenuList, cleanMenuName } from './mealText';
 
 const DAY_LABELS = ['일', '월', '화', '수', '목', '금', '토'];
-const SOURCE_LABEL = '민사고 급식 참고';
+const SOURCE_LABEL = '';
 const PLAN_GENERATION_VERSION = 'weekly-candidate-v3-rules';
 
 const LOW_VALUE_KEYWORDS = [
@@ -178,8 +178,8 @@ function normalizeManualMeal(meal, manualPlan) {
   const tag = meal.tag || shoppingLabel;
 
   return {
-    sourceLabel: meal.sourceLabel || manualPlan.sourceLabel || SOURCE_LABEL,
     ...meal,
+    sourceLabel: '',
     group,
     day: meal.day || DAY_LABELS[date.getDay()],
     dateLabel: meal.dateLabel || formatShortDate(date),
@@ -197,7 +197,7 @@ export function getManualMonthlyMealPlan(monthKey) {
     monthLabel: manualPlan.monthLabel || getMonthLabel(monthKey),
     coverage: 'monthly',
     source: 'manual-reviewed',
-    sourceLabel: manualPlan.sourceLabel || SOURCE_LABEL,
+    sourceLabel: '',
     updatedAt: manualPlan.updatedAt || new Date().toISOString().slice(0, 10),
     meals: manualPlan.meals.map((meal) => normalizeManualMeal(meal, manualPlan)),
   };
